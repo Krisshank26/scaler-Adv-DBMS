@@ -33,6 +33,7 @@ class ClockSweep
         { 
             maxSize= maxCache ; 
             currentSize.store(0 ) ; 
+            cacheSafe= new ConcurrentCache<T >() ; 
             cacheSafe->head= nullptr ; 
             cacheSafe->tail= nullptr ; 
             counter.store(0 ) ; 
@@ -40,9 +41,9 @@ class ClockSweep
 
         T getKey(string key ) 
         { 
+            lock_guard<mutex > lock(cacheSafe->mx ) ; 
             try 
             { 
-                lock_guard<mutex > lock(cacheSafe->mx ) ; 
                 /* cout << cacheMap.count(key ) << "H" << endl ; */ 
                 if(cacheSafe->cacheMap.count(key )!= 0 ) 
                 { 
@@ -60,12 +61,31 @@ class ClockSweep
 
         void pushFront(string key ) 
         { 
-            Node<T > node= (*(cacheSafe->cacheMap[key ] ) ) ; 
-            Node<T > pre= (*(node.prev ) ) ; 
-            node.prev->next= node.next ; 
-            node.next->prev= (&pre ) ; 
-            node.next= cacheSafe->head ; 
-            node.prev= nullptr ; 
+            /* cout << "Here" << endl ; */ 
+            Node<T >* node= cacheSafe->cacheMap[key ] ; 
+            if(node== (cacheSafe->head ) ) 
+            { 
+                /* cout << "ne" << endl ; */ 
+                return ; 
+            } 
+            else if(node== (cacheSafe->tail ) ) 
+            { 
+                node->prev->next= nullptr ; 
+                node->prev= nullptr ; 
+                node->next= cacheSafe->head ; 
+                cacheSafe->head->prev= node ; 
+                cacheSafe->head= node ; 
+            } 
+            else 
+            { 
+                Node<T > *pre= node->prev ; 
+                node->prev->next= node->next ; 
+                node->next->prev= pre ; 
+                node->next= cacheSafe->head ; 
+                cacheSafe->head->prev= node ; 
+                node->prev= nullptr ; 
+                cacheSafe->head= node ; 
+            } 
         } 
 
         string addValue(T value ) 
@@ -78,8 +98,8 @@ class ClockSweep
                 { 
                     /* auto dur= chrono::system_clock::now().time_since_epoch() ; 
                     auto timestamp= chrono::duration_cast<chrono::milliseconds >(dur ).count() ; */ 
-                    key= to_string(counter ) ; 
-                    counter++ ; 
+                    key= to_string(counter.load() ) ; 
+                    counter.store(counter.load()+ 1 ) ; 
                     Node<T >* node= new Node<T >() ; 
                     (*node ).value= value ; 
                     (*node ).next= cacheSafe->head ; 
@@ -121,14 +141,14 @@ class ClockSweep
             else if(currentSize> 1 ) 
             { 
                 cacheSafe->cacheMap.erase((*(cacheSafe->tail ) ).key ) ; 
-                Node<T > nd= *((*(cacheSafe->tail ) ).prev ) ; 
+                Node<T > *nd= ((*(cacheSafe->tail ) ).prev ) ; 
                 cacheSafe->tail->prev= nullptr ; 
-                nd.next= nullptr ; 
-                cacheSafe->tail= (&nd ) ; 
+                nd->next= nullptr ; 
+                cacheSafe->tail= nd ; 
             } 
         } 
 
-        void checkKeys() 
+        bool checkKeys() 
         { 
             lock_guard<mutex > lock(cacheSafe->mx ) ; 
             Node<T >* temp= cacheSafe->head ; 
@@ -138,6 +158,7 @@ class ClockSweep
                 /* unique_lock<mutex > lock(temp->mx ) ; 
                 vec.push_back(lock ) ; */ 
                 temp->useCount= temp->useCount- 1 ; 
+                /* cout << temp->value << " " << temp->next << endl ; */ 
                 if(temp->useCount== 0 ) 
                 { 
                     cacheSafe->cacheMap.erase(temp->key ) ; 
@@ -147,15 +168,17 @@ class ClockSweep
                         temp= cacheSafe->head ; 
                         if(cacheSafe->head!= nullptr ) 
                         { 
+                            cacheSafe->head->prev->next= nullptr ; 
                             cacheSafe->head->prev= nullptr ; 
                         } 
                     } 
                     else if(temp== cacheSafe->tail ) 
                     { 
                         cacheSafe->tail= cacheSafe->tail->prev ; 
-                        temp= cacheSafe->tail->next ; 
                         if(cacheSafe->tail!= nullptr ) 
                         { 
+                            temp= nullptr ; 
+                            cacheSafe->tail->next->prev= nullptr ; 
                             cacheSafe->tail->next= nullptr ; 
                         } 
                     } 
@@ -170,12 +193,16 @@ class ClockSweep
                     } 
                     currentSize-- ; 
                 } 
+                else 
+                { 
+                    temp= temp->next ; 
+                } 
             } 
             temp= cacheSafe->head ; 
             cout << "Cache Memory Computed After Clock Sweep Is: " << endl ; 
             while(temp!= nullptr ) 
             { 
-                cout << "Key: " << temp->key << " " << "Value: " << temp->value << " " ; 
+                cout << "Key: " << temp->key << " " << "Value: " << temp->value << ", " ; 
                 temp= temp->next ; 
             } 
             /* int sz= vec.size() ; 
@@ -185,6 +212,14 @@ class ClockSweep
             } */ 
             cout << endl ; 
             cout << "Cache Memory Is Computed " << endl ; 
+            if(currentSize> 0 ) 
+            { 
+                return true ; 
+            } 
+            else 
+            { 
+                return false ; 
+            } 
         } 
 } ; 
 
@@ -196,17 +231,22 @@ void executeTasks(ClockSweep<T > &clock )
     { 
         vec[i]= clock.addValue(i ) ; 
     } 
-    cout << clock.getKey(vec[2] ) << endl ; 
+    cout << clock.getKey(vec[6] ) << endl ; 
     cout << clock.getKey(vec[4] ) << endl ; 
 } 
 
 template<typename T > 
-void evictValue(ClockSweep<T > clock ) 
+void evictValue(ClockSweep<T > &clock ) 
 { 
     while(true ) 
     { 
-        this_thread::sleep_for(chrono::seconds(1 ) ) ; 
-        clock.checkKeys() ; 
+        this_thread::sleep_for(chrono::milliseconds(1000 ) ) ; 
+        bool keyAvailable= clock.checkKeys() ; 
+        if(keyAvailable== false ) 
+        { 
+            cout << "Cache Memory is Clear in Clock Sweep " << endl ; 
+            break ; 
+        } 
     } 
 } 
 
